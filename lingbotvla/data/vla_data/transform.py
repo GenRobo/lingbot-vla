@@ -54,6 +54,13 @@ class Normalizer:
                 norm_stats['observation.state']['q99'] = np.array(norm_stats['observation.state.arm.position']['q99'] + norm_stats['observation.state.effector.position']['q99'])
                 norm_stats['action']['q01'] = np.array(norm_stats['action.arm.position']['q01'][:6] + norm_stats['action.effector.position']['q01'][:1] + norm_stats['action.arm.position']['q01'][6:] + norm_stats['action.effector.position']['q01'][1:])
                 norm_stats['action']['q99'] = np.array(norm_stats['action.arm.position']['q99'][:6] + norm_stats['action.effector.position']['q99'][:1] + norm_stats['action.arm.position']['q99'][6:] + norm_stats['action.effector.position']['q99'][1:])
+            elif data_type == 'bm100':
+                # BM-100 norm_stats already has 'observation.state' (16D) and 'action' (16D)
+                # as top-level keys from compute_norm_bm100.py. Just convert to numpy.
+                for key in norm_stats:
+                    if isinstance(norm_stats[key], dict):
+                        for sub_key in norm_stats[key]:
+                            norm_stats[key][sub_key] = np.array(norm_stats[key][sub_key])
             elif data_type == 'customized':
                 for key in norm_stats:
                     if isinstance(norm_stats[key], dict):
