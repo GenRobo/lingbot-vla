@@ -216,3 +216,7 @@ run.sh
 start_multi_eval.sh
 trash/
 eval.sh
+output/
+/data/
+ckpts/
+results/
