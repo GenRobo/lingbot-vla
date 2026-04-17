@@ -1,4 +1,5 @@
 import json
+import shutil
 from copy import deepcopy
 import os
 import re
@@ -20,7 +21,7 @@ from lingbotvla.data import (
     VLADataCollatorWithPacking,
     build_dataloader,
 )
-from lingbotvla.data.vla_data import liberoDataset, RobotwinDataset, CustomizedRobotwinDataset
+from lingbotvla.data.vla_data import liberoDataset, RobotwinDataset, CustomizedRobotwinDataset, BM100Dataset
 from lingbotvla.distributed.offloading import build_activation_offloading_context
 from lingbotvla.distributed.parallel_state import get_parallel_state, init_parallel_state
 from lingbotvla.distributed.torch_parallelize import build_parallelize_model
@@ -327,8 +328,10 @@ def main():
             args.data.chunk_size = args.train.chunk_size
             if args.data.data_name == 'libero':
                 train_dataset = liberoDataset(repo_id=args.data.train_path, config=model.config, tokenizer=processor.tokenizer, data_config=args.data, image_processor=processor.image_processor if 'qwen' in args.model.tokenizer_path.lower() else None,use_depth_align=use_depth_align)
+            elif args.data.data_name == 'bm100':
+                train_dataset = BM100Dataset(repo_id=args.data.train_path, config=model.config, tokenizer=processor.tokenizer, data_config=args.data, image_processor=processor.image_processor if 'qwen' in args.model.tokenizer_path.lower() else None, use_depth_align=use_depth_align)
             elif 'robotwin' in args.data.data_name.lower():
-                train_dataset = RobotwinDataset(repo_id=args.data.train_path, config=model.config, tokenizer=processor.tokenizer, data_config=args.data, image_processor=processor.image_processor if 'qwen' in args.model.tokenizer_path.lower() else None, use_depth_align=use_depth_align)
+                train_dataset = CustomizedRobotwinDataset(repo_id=args.data.train_path, config=model.config, tokenizer=processor.tokenizer, data_config=args.data, image_processor=processor.image_processor if 'qwen' in args.model.tokenizer_path.lower() else None, use_depth_align=use_depth_align)
             args.train.compute_train_steps(args.data.max_seq_len, args.data.train_size, len(train_dataset))
         
         train_dataloader = build_dataloader(
@@ -714,6 +717,12 @@ def main():
                             else:
                                 save_model_weights(ema_hf_weights_path, ema_model_state_dict, model_assets=model_assets)
                             logger.info_rank0(f"Huggingface EMA checkpoint saved at {ema_hf_weights_path} successfully!")
+                        # Clean up DCP checkpoint dirs, keep only hf_ckpt/
+                        for subdir in os.listdir(save_checkpoint_path):
+                            subdir_path = os.path.join(save_checkpoint_path, subdir)
+                            if os.path.isdir(subdir_path) and subdir not in ("hf_ckpt", "ema_hf_ckpt"):
+                                shutil.rmtree(subdir_path)
+                                logger.info_rank0(f"Removed DCP dir: {subdir_path}")
 
         data_loader_tqdm.close()
         start_step = 0
@@ -762,6 +771,12 @@ def main():
                         else:
                             save_model_weights(ema_hf_weights_path, ema_model_state_dict, model_assets=model_assets)
                         logger.info_rank0(f"Huggingface EMA checkpoint saved at {ema_hf_weights_path} successfully!")
+                    # Clean up DCP checkpoint dirs, keep only hf_ckpt/
+                    for subdir in os.listdir(save_checkpoint_path):
+                        subdir_path = os.path.join(save_checkpoint_path, subdir)
+                        if os.path.isdir(subdir_path) and subdir not in ("hf_ckpt", "ema_hf_ckpt"):
+                            shutil.rmtree(subdir_path)
+                            logger.info_rank0(f"Removed DCP dir: {subdir_path}")
 
     torch.cuda.synchronize()
     # release memory
