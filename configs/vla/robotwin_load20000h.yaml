@@ -1,6 +1,6 @@
 model:
-  model_path: /path/to/LingBot-VLA
-  tokenizer_path: /path/to/Qwen2.5-VL-3B-Instruct/
+  model_path: /path/to/lingbot-vla-4b
+  tokenizer_path: /path/to/Qwen2.5-VL-3B-Instruct
   post_training: true
   adanorm_time: true
   old_adanorm: true
@@ -11,10 +11,10 @@ data:
   train_path: /path/to/mixed_robotwin_5tasks
   num_workers: 8
   norm_type: bounds_99_woclip
-  norm_stats_file: assets/norm_stats/robotwin_50.json
+  norm_stats_file: assets/norm_stats/robotwin_5_customized.json
 
 train:
-  output_dir: /path/to/lingbot_robotwin5tasks/
+  output_dir: /path/to/output
   loss_type: L1_fm
   data_parallel_mode: fsdp2
   enable_full_shard: false
@@ -31,12 +31,13 @@ train:
   max_state_dim: 75
   lr: 1.0e-4
   lr_decay_style: constant
-  num_train_epochs: 69
-  micro_batch_size: 32
-  global_batch_size: 256
+  num_train_epochs: 20
+  micro_batch_size: 8
+  global_batch_size: 32
   max_steps: 220000
   ckpt_manager: dcp
-  save_steps: 220000
+  save_steps: 10000
+  save_hf_weights: true
   save_epochs: 69
   enable_fp32: true
   enable_resume: true
