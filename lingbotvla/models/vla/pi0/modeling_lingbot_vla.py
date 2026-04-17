@@ -1550,6 +1550,12 @@ class LingbotVlaPolicy(PreTrainedPolicy):
 
         loss_dict["batch_mean_losses"] = batch_mean_losses.clone()
 
+        # Mask out loss for padded actions (beyond episode boundary)
+        if action_is_pad is not None:
+            in_episode_bound = ~action_is_pad  # (B, T)
+            losses = losses * in_episode_bound.unsqueeze(-1)
+            loss_dict["losses_after_in_ep_bound"] = losses.clone()
+
         losses = losses[:, :, :self.config.action_dim]
         loss_dict["losses"] = losses.clone()
 
