@@ -28,7 +28,11 @@ if Version(torch.__version__) > Version("2.5.0"):
         flex_attention,
     )
 
-# @torch.compile(dynamic=False)
+# more aggressive compile setting
+_flex_attention = torch.compile(
+    flex_attention,
+    mode="max-autotune-no-cudagraphs")
+
 def flex_attention_forward(
     query_states: torch.Tensor,
     key_states: torch.Tensor,
@@ -39,32 +43,10 @@ def flex_attention_forward(
     """
     This is defined out of classes to make compile happy.
     """
-    batch_size, seq_len, num_att_heads, head_dim = query_states.shape # head_dim=256
+    batch_size, seq_len, num_att_heads, head_dim = query_states.shape
     original_dtype = query_states.dtype
-    num_key_value_heads = key_states.shape[2] # 1
-    num_key_value_groups = num_att_heads // num_key_value_heads # 8 // 1
-    # key_states = key_states[:, :, :, None, :]
-    # key_states = key_states.expand(
-    #     batch_size, key_states.shape[1], num_key_value_heads, num_key_value_groups, head_dim
-    # )
-    # key_states = key_states.reshape(
-    #     batch_size, key_states.shape[1], num_key_value_heads * num_key_value_groups, head_dim
-    # )
-
-    # value_states = value_states[:, :, :, None, :]
-    # value_states = value_states.expand(
-    #     batch_size, value_states.shape[1], num_key_value_heads, num_key_value_groups, head_dim
-    # )
-    # value_states = value_states.reshape(
-    #     batch_size, value_states.shape[1], num_key_value_heads * num_key_value_groups, head_dim
-    # )
-
-    key_states = einops.repeat(
-        key_states, "b l h d -> b l (h g) d", g=num_key_value_groups
-    )
-    value_states = einops.repeat(
-        value_states, "b l h d -> b l (h g) d", g=num_key_value_groups
-    )
+    # num_key_value_heads = key_states.shape[2]
+    # num_key_value_groups = num_att_heads // num_key_value_heads
 
     query_states = query_states.transpose(1, 2)
     key_states = key_states.transpose(1, 2)
@@ -89,8 +71,8 @@ def flex_attention_forward(
         return mask_mod
 
     b_mask, h_mask, q_len, kv_len = causal_mask.shape  # The shape of your mask
-    # ipdb.set_trace()
-    block_size = 128
+
+    block_size = 128 # some gpus do not support 64
     q_len_rounded = _round_up_to_multiple(q_len, block_size)
     kv_len_rounded = _round_up_to_multiple(kv_len, block_size)
 
@@ -129,14 +111,19 @@ def flex_attention_forward(
     )
 
     #  mask is applied inside the kernel, ideally more efficiently than score_mod.
-    attn_output, attention_weights = flex_attention(
+    attn_output = _flex_attention(
         query_states,
         key_states,
         value_states,
         block_mask=block_mask,
+        kernel_options = {
+            "BLOCK_M": 32, "BLOCK_N": 32,
+            "BLOCK_M1": 32, "BLOCK_N1": 32,
+            "BLOCK_M2": 32, "BLOCK_N2": 32,
+            "num_stages": 2, "num_warps": 4,
+        },
         enable_gqa=True,  # because we shaped query/key states for GQA
-        scale=head_dim**-0.5 if scaling is None else scaling,
-        return_lse=True,
+        scale=head_dim**-0.5 if scaling is None else scaling, # on certain device, the head_dim ** 0.5 break compile !
     )
     attn_output = attn_output[:, :, :seq_len, :].to(dtype=original_dtype)
     attn_output = attn_output.transpose(1, 2).contiguous()  # [B, Q_LEN, H, head_dim]

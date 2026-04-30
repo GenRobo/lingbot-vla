@@ -56,23 +56,15 @@ class ModelArguments:
         metadata={"help": "Path to the VLM. Defaults to None."},
     )
     post_training: Optional[bool] = field(
-        default=False,
+        default=True,
         metadata={"help": "Whether to use post training."},
     )
     vocab_size: Optional[int] = field(
         default=0,
         metadata={"help": "Vocab size. 257152 is for paligemma in initial pi0."},
     )
-    incremental_training: Optional[bool] = field(
-        default=False,
-        metadata={"help": "Whether to apply incremental training."},
-    )
-    depth_incremental_training: Optional[bool] = field(
-        default=False,
-        metadata={"help": "Whether to re-init depth_align_head."},
-    )
     adanorm_time: Optional[bool] = field(
-        default=False,
+        default=True,
         metadata={"help": "Whether to apply extra time embed to ada_norm in expert."},
     )
     encoders: Dict[Literal["image"], Dict[str, str]] = field(
@@ -83,25 +75,9 @@ class ModelArguments:
         default_factory=dict,
         metadata={"help": "Multimodal decoder config and weights."},
     )
-    input_encoder: Literal["encoder", "decoder"] = field(
-        default="encoder",
-        metadata={"help": "Use encoder to encode input images or use decoder.encoder to encode input images."},
-    )
-    output_encoder: Literal["encoder", "decoder"] = field(
-        default="decoder",
-        metadata={"help": "Use encoder to encode output images or use decoder.encoder to encode output images."},
-    )
-    encode_target: bool = field(
-        default=False,
-        metadata={"help": "Whether to encode target with decoder. Only supports stable diffusion as decoder."},
-    )
     attn_implementation: Optional[Literal["eager", "sdpa", "flash_attention_2", "flash_attention_3"]] = field(
         default="flash_attention_2",
         metadata={"help": "Attention implementation to use."},
-    )
-    moe_implementation: Optional[Literal[None, "eager", "fused"]] = field(
-        default=None,
-        metadata={"help": "MoE implementation to use."},
     )
     basic_modules: Optional[List[str]] = field(
         default_factory=list,
@@ -130,10 +106,6 @@ class ModelArguments:
     final_norm_adanorm: bool = field(
         default=False,
         metadata={"help": "Whether to use adanorm in final norm."},
-    )
-    old_adanorm: bool = field(
-        default=False,
-        metadata={"help": "Whether to use old adanorm."},
     )
     moge_path: str = field(
         default=None,
@@ -200,21 +172,9 @@ class DataArguments:
         default=None,
         metadata={"help": "Dataset name for multimodal training."},
     )
-    data_root: str = field(
-        default=None,
-        metadata={"help": "Root path of datasets."},
-    )
-    data_tag: Literal["default", "mmtag"] = field(
-        default="default",
-        metadata={"help": "Dataset tag for multimodal training."},
-    )
     text_keys: str = field(
         default=None,
         metadata={"help": "Key to get text from the training data."},
-    )
-    image_keys: str = field(
-        default="images",
-        metadata={"help": "Key to get images from the training data."},
     )
     chat_template: str = field(
         default="default",
@@ -225,7 +185,7 @@ class DataArguments:
         metadata={"help": "Maximum sequence length in training."},
     )
     num_workers: int = field(
-        default=20,
+        default=8,
         metadata={"help": "Number of workers to load data."},
     )
     prefetch_factor: int = field(
@@ -239,6 +199,30 @@ class DataArguments:
     pin_memory: bool = field(
         default=True,
         metadata={"help": "Whether to pin memory for dataloader."},
+    )
+    robot_config_root: str = field(
+        default='configs/robot_configs',
+        metadata={"help": "Path to get all robot configs."},
+    )
+    joints: Optional[List[str]] = field(
+        default=None,
+        metadata={"help": "The order of joints and their dim"},
+    )
+    cameras:Optional[List[str]] = field(
+        default=None,
+        metadata={"help": "The order of used images"},
+    )
+    norm_type:Literal["meanstd", "bounds_99", "minmax", "identity"] = field(
+        default="bounds_99",
+        metadata={"help": "Type of the normalization."},
+    )
+    img_size: int = field(
+        default=224,
+        metadata={"help": "Size of the image."},
+    )
+    norm_stats_file: str = field(
+        default=None,
+        metadata={"help": "Path to the normalization stats file."},
     )
 
     def __post_init__(self):
@@ -288,9 +272,13 @@ class TrainingArguments:
         default=None,
         metadata={"help": "Global batch size. If None, use `micro_batch_size` * `data_parallel_size`."},
     )
-    num_train_epochs: int = field(
+    gradient_accumulation_steps: Optional[int] = field(
         default=1,
-        metadata={"help": "Epochs to train."},
+        metadata={"help": "Gradient accumulation steps. If set, overrides the value derived from global_batch_size."},
+    )
+    num_train_epochs: Optional[int] = field(
+        default=None,
+        metadata={"help": "Epochs to train. If None, train indefinitely until max_steps is reached."},
     )
     rmpad: bool = field(
         default=True,
@@ -331,10 +319,6 @@ class TrainingArguments:
     lr_decay_ratio: float = field(
         default=1.0,
         metadata={"help": "Ratio of learning rate decay steps."},
-    )
-    use_doptim: bool = field(
-        default=False,
-        metadata={"help": "Use veScale's ZeRO optimizer."},
     )
     enable_mixed_precision: bool = field(
         default=True,
@@ -377,10 +361,6 @@ class TrainingArguments:
         metadata={
             "help": "When enabling activation offload, `activation_gpu_limit` GB activations are allowed to reserve on GPU."
         },
-    )
-    enable_manual_eager: bool = field(
-        default=False,
-        metadata={"help": "Enable veScale's manual eager."},
     )
     init_device: Literal["cpu", "cuda", "meta"] = field(
         default="cuda",
@@ -460,7 +440,7 @@ class TrainingArguments:
         metadata={"help": "Random seed."},
     )
     use_wandb: bool = field(
-        default=True,
+        default=False,
         metadata={"help": "Use wandb to log experiment."},
     )
     wandb_project: str = field(
@@ -501,7 +481,107 @@ class TrainingArguments:
     )
     max_steps: Optional[int] = field(
         default=None,
-        metadata={"help": "Max training steps per epoch. (for debug)"},
+        metadata={"help": "Global max training steps. If None, train until all epochs are completed."},
+    )
+    freeze_vit: bool = field(
+        default=False,
+        metadata={"help": "Whether or not to freeze the vit parameters."},
+    )
+    vit_lr: float = field(
+        default=1e-6,
+        metadata={"help": "Maximum learning rate for vit parameters."},
+    )
+    freeze_vision_encoder: bool = field(
+        default=False,
+        metadata={"help": "Whether or not to freeze the vision encoder in VLA model."},
+    )
+    tokenizer_max_length: int = field(
+        default=48,
+        metadata={"help": "Maximum length of the tokenizer."},
+    )
+    enable_expert_vision: bool = field(
+        default=False,
+        metadata={"help": "Whether to enable expert vision."},
+    )
+    expert_vision_type: str | None = field(
+        default=None,
+        metadata={"help": "Type of expert vision. Currently only support vit."},
+    )
+    expert_vision_path: str | None = field(
+        default=None,
+        metadata={"help": "Path to expert vision model."},
+    )
+    action_dim: int = field(
+        default=None,
+        metadata={"help": "Action dimension."},
+    )
+    max_action_dim: int = field(
+        default=32,
+        metadata={"help": "Action dimension after padding."},
+    )
+    max_state_dim: int = field(
+        default=32,
+        metadata={"help": "State dimension after padding."},
+    )
+    chunk_size: int = field(
+        default=50,
+        metadata={"help": "Chunk size of action."},
+    )
+    vlm_causal: bool = field(
+        default=False,
+        metadata={"help": "Whether to use causal atten for img anb lang tokens in vlm."},
+    )
+    loss_type: str = field(
+        default='fm',
+        metadata={"help": "Which loss to use."},
+    )
+    align_params: Optional[Dict[str, Any]] = field(
+        default_factory=dict,
+        metadata={"help": "The config of vaco"},
+    )
+    decayed_max_grad_norm: float = field(
+        default=1.0,
+        metadata={"help": "Maximum norm for the decayed gradients."},
+    )
+    stable_train_steps: int = field(
+        default=100000,
+        metadata={"help": "Training steps for stable training, after this step, the decayed_max_grad_norm will be applied."},
+    )
+    resume_dataloader_state: bool = field(
+        default=True,
+        metadata={"help": "Whether to resume dataloader."},
+    )
+    norm_qkv: bool = field(
+        default=False,
+        metadata={"help": "Whether to apply RMSNorm for qkv."},
+    )
+    train_expert_only: bool = field(
+        default=False,
+        metadata={"help": "Whether or not to freeze the VLM."},
+    )
+    train_state_proj: bool = field(
+        default=True,
+        metadata={"help": "Whether train state proj."},
+    )
+    adapt_to_pi_aloha: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Whether adapt to pi aloha."},
+    )
+    use_delta_joint_actions_aloha: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Whether use delta joint actions aloha."},
+    )
+    use_cache: bool = field(
+        default=True,
+        metadata={"help": "Whether use cache."},
+    )
+    resize_imgs_with_padding: List[int] = field(
+        default_factory=lambda: [224, 224],
+        metadata={"help": "shape of visual input"},
+    )
+    num_steps : int = field(
+        default=10,
+        metadata={"help": "Denosing step num."},
     )
 
     def __post_init__(self):
@@ -555,20 +635,22 @@ class TrainingArguments:
             "cpu init is not supported when enable ep. Please use `init_device = cuda` or `init_device = meta` instead."
         )
 
-        # calculate gradient accumulation steps
-        if self.global_batch_size is None:
-            self.global_batch_size = self.micro_batch_size * self.data_parallel_size
-            self.gradient_accumulation_steps = 1
-            logger.info_rank0("`global_batch_size` is None, disable gradient accumulation.")
-        elif self.global_batch_size % (self.micro_batch_size * self.data_parallel_size) == 0:
-            self.gradient_accumulation_steps = self.global_batch_size // (
-                self.micro_batch_size * self.data_parallel_size
-            )
-            logger.info_rank0(f"Set gradient accumulation to {self.gradient_accumulation_steps}.")
-        else:
+        # validate num_train_epochs and max_steps
+        if self.num_train_epochs is None and self.max_steps is None:
+            raise ValueError("At least one of `num_train_epochs` and `max_steps` must be specified.")
+        if self.num_train_epochs is None:
+            self.num_train_epochs = 999999999
+
+        # calculate gradient accumulation steps and global batch size
+        expected_gbs = self.micro_batch_size * self.data_parallel_size * self.gradient_accumulation_steps
+        if self.global_batch_size is not None and self.global_batch_size != expected_gbs:
             raise ValueError(
-                f"`global_batch_size` should be a multiple of {self.micro_batch_size * self.data_parallel_size}."
+                f"`global_batch_size`({self.global_batch_size}) != "
+                f"micro_batch_size({self.micro_batch_size}) * data_parallel_size({self.data_parallel_size}) "
+                f"* gradient_accumulation_steps({self.gradient_accumulation_steps}) = {expected_gbs}"
             )
+        self.global_batch_size = expected_gbs
+        logger.info_rank0(f"gradient_accumulation_steps={self.gradient_accumulation_steps}, global_batch_size={self.global_batch_size}")
 
         if self.gradient_accumulation_steps > 1 and self.enable_fsdp_offload:
             raise ValueError("Gradient accumulation is not supported with FSDP offload.")
@@ -600,10 +682,6 @@ class TrainingArguments:
 
     @property
     def train_steps(self) -> int:
-        if self.max_steps is not None and self._train_steps >= self.max_steps:
-            logger.warning_once(f"Set train_steps to {self.max_steps}. It should be for debug purpose only.")
-            return self.max_steps
-
         if self._train_steps == -1:
             raise ValueError("Please run `compute_train_steps` first!")
 
@@ -623,23 +701,6 @@ class InferArguments:
         default=42,
         metadata={"help": "Random seed."},
     )
-    do_sample: bool = field(
-        default=True,
-        metadata={"help": "Whether or not to use sampling in decoding."},
-    )
-    temperature: float = field(
-        default=1.0,
-        metadata={"help": "The temperature value of decoding."},
-    )
-    top_p: float = field(
-        default=1.0,
-        metadata={"help": "The top_p value of decoding."},
-    )
-    max_tokens: int = field(
-        default=1024,
-        metadata={"help": "Max tokens to generate."},
-    )
-
     def __post_init__(self):
         if self.tokenizer_path is None:
             self.tokenizer_path = self.model_path

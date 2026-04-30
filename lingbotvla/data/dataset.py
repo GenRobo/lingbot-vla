@@ -20,16 +20,12 @@ import torch
 from datasets import load_dataset
 from datasets.distributed import split_dataset_by_node
 from torch.utils.data import Dataset, IterableDataset
-from lerobot.common.policies.pi0.configuration_pi0 import PI0Config
-from torchvision.transforms.v2 import Resize
-from transformers import AutoTokenizer, AutoImageProcessor
-from lerobot.common.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
-import json
+
 from ..distributed.parallel_state import get_parallel_state
 from ..utils import logging
 from ..utils.dist_utils import main_process_first
 from .vla_data import *
-from .vla_data.transform import Normalizer, prepare_action, prepare_images, prepare_language, prepare_state
+
 logger = logging.get_logger(__name__)
 
 try:

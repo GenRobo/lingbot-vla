@@ -20,7 +20,8 @@ from abc import ABC
 import torch
 from transformers import AutoModel, AutoModelForCausalLM, AutoModelForVision2Seq, PreTrainedModel
 from transformers.modeling_utils import no_init_weights
-from lerobot.common.policies.pi0.configuration_pi0 import PI0Config
+from lerobot.policies.pi0.configuration_pi0 import PI0Config
+
 from ..utils import logging
 from ..utils.import_utils import is_torch_npu_available, is_vescale_available
 from .module_utils import init_empty_weights, load_model_weights
@@ -102,13 +103,8 @@ class CustomizedModelingLoader(BaseModelLoader):
         weights_path = kwargs.pop("weights_path", None)
         empty_init = kwargs.pop("empty_init", False)
         vlm_repo_id = kwargs.pop("vlm_repo_id", None)
-        enable_expert_vision = kwargs.pop("enable_expert_vision", False)
-        expert_vision_path = kwargs.pop("expert_vision_path", None)
         post_training = kwargs.pop("post_training", False)
         adanorm_time = kwargs.pop("adanorm_time", False)
-        incremental_training = kwargs.pop("incremental_training", False)
-        depth_incremental_training = kwargs.pop("depth_incremental_training", False)
-        norm_qkv = kwargs.pop("norm_qkv", False)
 
         logger.info_rank0(
             f"Loading model from customized modeling.\n"
@@ -145,13 +141,13 @@ class CustomizedModelingLoader(BaseModelLoader):
                     elif (self.model_cls.__name__ == "LingbotVlaPolicy" and
                         self.model_cls.__module__ == "lingbotvla.models.vla.pi0.modeling_lingbot_vla"):
                         model = self.model_cls(config=init_kwargs['config'], tokenizer_path=init_kwargs['config'].tokenizer_path).to(init_kwargs['torch_dtype'])
-                        if vlm_repo_id is not None and incremental_training:
+                        if vlm_repo_id is not None:
                             load_vlm_only = True
                     else:
                         model = self.model_cls._from_config(**init_kwargs)
 
             if not empty_init:
-                load_model_weights(model, weights_path, init_device, load_vlm_only=load_vlm_only, enable_expert_vision=enable_expert_vision, expert_vision_path=expert_vision_path, post_training=post_training, incremental_training=incremental_training, depth_incremental_training=depth_incremental_training, norm_qkv=norm_qkv, adanorm_time=adanorm_time)
+                load_model_weights(model, weights_path, init_device, load_vlm_only=load_vlm_only, post_training=post_training)
 
             # we should tie embeddings after loading weights because init_empty_weights() leads to untied weights,
             if getattr(model.config, "tie_word_embeddings", True):

@@ -6,8 +6,8 @@ model:
 
 data:
   datasets_type: vla
-  data_name: robotwin
-  train_path: robotwin/
+  data_name: robot_config_filename
+  train_path: path_to_dataset
   joints:
     - arm.position: 14
     - effector.position: 2
@@ -16,12 +16,11 @@ data:
     - camera_wrist_left
     - camera_wrist_right
   num_workers: 8
-  norm_type: bounds_99
-  norm_stats_file: assets/norm_stats/robotwin_50.json
+  norm_type: meanstd
+  norm_stats_file: norm_path
 
 train:
-  output_dir: output/
-  loss_type: L1_fm
+  output_dir: "output/"
   data_parallel_mode: fsdp2
   enable_full_shard: false
   module_fsdp_enable: true
@@ -33,13 +32,13 @@ train:
   tokenizer_max_length: 72
   max_action_dim: 75
   max_state_dim: 75
-  lr: 1.0e-4
+  lr: 5.0e-5
   lr_decay_style: constant
   micro_batch_size: 32
   gradient_accumulation_steps: 1 # global_batch_size = micro_batch_size * gradient_accumulation_steps * 8 = 256 when we train with 8 GPUs
-  max_steps: 20000
+  max_steps: 40000
   ckpt_manager: dcp
-  save_steps: 20000
+  save_steps: 10000
   save_epochs: 0
   enable_fp32: true   # Control the precision of the action expert
   enable_resume: true
