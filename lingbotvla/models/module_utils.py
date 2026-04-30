@@ -220,35 +220,22 @@ def load_model_weights(
     init_device: Literal["cpu", "cuda"] = "cuda",
     dtensor_factory: Optional[Callable[["torch.Tensor", Any, Any], "torch.Tensor"]] = None,
     load_vlm_only: bool = False,
-    enable_expert_vision: bool = False,
-    expert_vision_path: str | None = None,
     post_training: bool = False,
-    incremental_training: bool = False,
-    depth_incremental_training: bool = False,
-    norm_qkv: bool = False,
-    adanorm_time: bool = False,
 ) -> None:
     """
     Loads pre-trained model states in transformers' format.
     """
     buffer_dict = {name: buffer.clone() for name, buffer in model.named_buffers()}
     parameter_names = {name for name, _ in model.named_parameters()}
-    vlm_parameter_names = {name for name, _ in model.model.qwenvl_with_expert.qwenvl.named_parameters()}
-    print(f'====vlm contains {len(vlm_parameter_names)} paras=====')
-    if expert_vision_path is not None or enable_expert_vision:
-        dino_parameter_names = {name for name, _ in model.model.qwenvl_with_expert.expert_visual.named_parameters()}
-        print(f'====dino contains {len(dino_parameter_names)} paras=====')
     model.to_empty(device=init_device)
     if post_training:
         logger.info_rank0(f">>> Doing Post-Training now, no need to load LLM's embedding weight.")
-    elif incremental_training:
-        logger.info_rank0(f">>> Load pretrained weights for incremental training.")
     elif load_vlm_only:
         logger.info_rank0(f">>> Doing Pre-Training now.")
     else:
         logger.info_rank0(f">>> Fine-tuneing based on PI0 now.")
     # TODO
-    state_dict_iterators = _load_state_dict(weights_path, expert_vision_path)
+    state_dict_iterators = _load_state_dict(weights_path)
     vlm_perfix = get_model_prefix(parameter_names) if load_vlm_only else ''
     for state_dict_iterator in tqdm(
         state_dict_iterators, desc="Loading checkpoint shards", disable=int(os.getenv("LOCAL_RANK", "-1")) > 0
@@ -261,22 +248,13 @@ def load_model_weights(
             if name in buffer_dict.keys():  # persistent buffers
                 buffer_dict[name] = tensor.clone()
             elif name in parameter_names:
-                if incremental_training:
-                    try:
-                        _dispatch_parameter(model, name, tensor, dtensor_factory)
-                        parameter_names.remove(name)
-                    except:
-                        logger.info_rank0(f">>>The {name} weight need to be reinitialized.")
-                else:
-                    parameter_names.remove(name)
-                    _dispatch_parameter(model, name, tensor, dtensor_factory)
+                parameter_names.remove(name)
+                _dispatch_parameter(model, name, tensor, dtensor_factory)
             else:
                 if post_training:
                     error_msg = f"Unexpected key '{name}' found in state dict during Post-Training. This is not allowed!!!"
                     logger.info_rank0(error_msg)
                     raise KeyError(error_msg)
-                if expert_vision_path is not None or enable_expert_vision:
-                    assert '.expert_visual.' not in name, "vision encoder need to be inited for action expert!"
                 logger.info_rank0(f"Unexpected key in state dict: {name}.")
 
         del state_dict_iterator
@@ -287,54 +265,12 @@ def load_model_weights(
     if post_training:
         assert len(parameter_names) == 0, f"Missing {parameter_names} during Post-Training. This is not allowed!!!"
     if len(parameter_names) > 0:
-        if load_vlm_only and (expert_vision_path is not None or enable_expert_vision) and not incremental_training:
-            num_missing_vlm_para, num_missing_dino_para = 0, 0
-            for name in parameter_names:
-                if '.paligemma.' in name or '.qwenvl.' in name:
-                    num_missing_vlm_para += 1
-                elif '.expert_visual.' in name:
-                    num_missing_dino_para += 1
-            print(f'====Missing {num_missing_vlm_para} paras in vlm====')
-            print(f'====Missing {num_missing_dino_para} paras in DINO====')
-            assert (all('.paligemma.' not in name for name in parameter_names) or all('.qwenvl.' not in name for name in parameter_names)) and all('.expert_visual.' not in name for name in parameter_names), "Parameters in VLM and Expert_Visual are not loaded when PreTraining!!!"
-        elif incremental_training and not depth_incremental_training:
-            if norm_qkv:
-                assert all('_proj.' in name or '_layernorm.' in name for name in parameter_names), "Only MLP weight can be reinitialized when IncrementalTraining!!!"
-            else:
-                assert all('_proj.' in name or 'gate' in name for name in parameter_names), "Only MLP weight can be reinitialized when IncrementalTraining!!!"
-        elif depth_incremental_training:
-            assert all('depth_align_head.' in name for name in parameter_names), "Only depth align head weight can be reinitialized when IncrementalTraining with Depth Model!!!"
-        elif load_vlm_only:
-            num_missing_vlm_para = 0
-            for name in parameter_names:
-                if '.paligemma.' in name or '.qwenvl.' in name:
-                    num_missing_vlm_para += 1
-            print(f'====Missing {num_missing_vlm_para} paras in vlm====')
+        if load_vlm_only:
             assert all('.paligemma.' not in name for name in parameter_names) or all('.qwenvl.' not in name for name in parameter_names), \
                 "Parameters in VLM  are not loaded when PreTraining!!!"
         logger.info_rank0(f"Find missing key(s) in state dict: {parameter_names}, initialize them.")
-        if adanorm_time:
-            logger.info_rank0(">>> Parameters in AdaNorm has been ZERO initialized.")
-            exclude_keywords = [
-                "input_layernorm.gamma_beta_gate",
-                "post_attention_layernorm.gamma_beta_gate",
-                "norm.gamma_beta_gate",
-                "input_layernorm.gamma",
-                "post_attention_layernorm.gamma",
-                "norm.gamma",
-                "input_layernorm.beta",
-                "post_attention_layernorm.beta",
-                "norm.beta",
-                "input_layernorm.gate",
-                "post_attention_layernorm.gate",
-                "norm.gate",
-            ]
         for name in parameter_names:
-            if not adanorm_time:
-                _init_parameter(model, name)
-            else:
-                if not any(keyword in name for keyword in exclude_keywords):
-                    _init_parameter(model, name)
+            _init_parameter(model, name)
 
     # we should tie embeddings after loading weights because to_empty() leads to untied weights,
     # except for fsdp1 (custom init) and fsdp2 (swap tensor) contexts.

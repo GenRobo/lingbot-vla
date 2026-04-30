@@ -14,6 +14,8 @@ class NormStats:
     q99: numpydantic.NDArray | None = None  # 99th quantile
     q02: numpydantic.NDArray | None = None  # 2nd quantile
     q98: numpydantic.NDArray | None = None  # 98th quantile
+    min: numpydantic.NDArray | None = None  # 1st quantile
+    max: numpydantic.NDArray | None = None  # 99th quantile
 
 
 class RunningStats:
@@ -93,13 +95,15 @@ class RunningStats:
         if chunk_size is not None:
             assert isinstance(chunk_size, int)
             self._mean = self._mean.reshape(chunk_size, -1)
+            self._min = self._min.reshape(chunk_size, -1)
+            self._max = self._max.reshape(chunk_size, -1)
             stddev = stddev.reshape(chunk_size, -1)
             q01 = q01.reshape(chunk_size, -1)
             q99 = q99.reshape(chunk_size, -1)
             q02 = q02.reshape(chunk_size, -1)
             q98 = q98.reshape(chunk_size, -1)
 
-        return NormStats(mean=self._mean, std=stddev, q01=q01, q99=q99, q02=q02, q98=q98)
+        return NormStats(mean=self._mean, std=stddev, q01=q01, q99=q99, q02=q02, q98=q98, min=self._min, max=self._max)
 
     def _adjust_histograms(self):
         """Adjust histograms when min or max changes."""

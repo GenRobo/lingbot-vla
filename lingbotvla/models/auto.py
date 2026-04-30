@@ -75,23 +75,21 @@ def build_foundation_model(
     adanorm_time = config_kwargs['adanorm_time']
     assert not (config_kwargs['split_gate_liner'] and config_kwargs['nosplit_gate_liner']), 'split_gate_liner and nosplit_gate_liner can not be both True.'
     enable_expert_vision = config_kwargs['enable_expert_vision']
-    incremental_training = config_kwargs['incremental_training']
-    depth_incremental_training = config_kwargs['depth_incremental_training']
     norm_qkv =  config_kwargs['norm_qkv']
     loss_type = config_kwargs['loss_type']
+
     config = PreTrainedConfig.from_pretrained(config_path)
-    config.train_state_proj = True
+    config.train_state_proj = config_kwargs['train_state_proj']
+    assert config.train_state_proj
     config.adanorm_time = adanorm_time
     config.split_gate_liner = config_kwargs['split_gate_liner']
     config.nosplit_gate_liner = config_kwargs['nosplit_gate_liner']
     config.separate_time_proj = config_kwargs['separate_time_proj']
-    config.old_adanorm = config_kwargs['old_adanorm']
     config.final_norm_adanorm = config_kwargs['final_norm_adanorm']
     config.freeze_vision_encoder = freeze_vision_encoder
     config.tokenizer_max_length = tokenizer_max_length
-    config.attention_implementation = 'flex' # TODO
-    config.enable_expert_vision = config_kwargs['enable_expert_vision']
-    config.expert_vision_type = config_kwargs['expert_vision_type']
+    config.use_cache = False # drop kv cache during training
+    config.attention_implementation = 'flex'
     config.action_dim = config_kwargs['action_dim']
     config.max_action_dim = config_kwargs['max_action_dim']
     config.max_state_dim = config_kwargs['max_state_dim']
@@ -103,6 +101,13 @@ def build_foundation_model(
     config.align_params = config_kwargs['align_params']
     config.norm_qkv = config_kwargs['norm_qkv']
     config.use_lm_head = use_lm_head
+    
+    config.attn_implementation = attn_implementation
+    config.adapt_to_pi_aloha = config_kwargs['adapt_to_pi_aloha']
+    config.use_delta_joint_actions_aloha = config_kwargs['use_delta_joint_actions_aloha']
+    config.train_expert_only = config_kwargs['train_expert_only']
+    config.resize_imgs_with_padding = config_kwargs['resize_imgs_with_padding']
+
     if vocab_size == 0:
         if vlm_repo_id and 'paligemma' in vlm_repo_id:
             config.vocab_size = 257216
@@ -144,8 +149,6 @@ def build_foundation_model(
         expert_vision_path=expert_vision_path,
         post_training=post_training,
         adanorm_time=adanorm_time,
-        incremental_training=incremental_training,
-        depth_incremental_training=depth_incremental_training,
         norm_qkv=norm_qkv,
         enable_expert_vision=enable_expert_vision,
     )

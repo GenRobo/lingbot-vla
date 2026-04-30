@@ -32,38 +32,11 @@ class Normalizer:
     def __init__(
         self,
         norm_stats: Dict[str, Dict[str, np.ndarray]],
-        from_file: bool=False,
         data_type: str=None,
         norm_type: Dict[str, str] | None = None,
     ):
-        if from_file:
-            if data_type == 'libero':
-                norm_stats['state']['mean'] = np.array(norm_stats['state']['mean'][:8])
-                norm_stats['state']['std'] = np.array(norm_stats['state']['std'][:8])
-                norm_stats['actions']['mean'] = np.array(norm_stats['actions']['mean'][:7])
-                norm_stats['actions']['std'] = np.array(norm_stats['actions']['std'][:7])
-            elif data_type == 'robotwin':
-                norm_stats['observation.state'], norm_stats['action']  = {}, {}
-                norm_stats['observation.state']['q01'] = np.array(norm_stats['observation.state.arm.position']['q01'][:6] + norm_stats['observation.state.effector.position']['q01'][:1] + norm_stats['observation.state.arm.position']['q01'][6:] + norm_stats['observation.state.effector.position']['q01'][1:])
-                norm_stats['observation.state']['q99'] = np.array(norm_stats['observation.state.arm.position']['q99'][:6] + norm_stats['observation.state.effector.position']['q99'][:1] + norm_stats['observation.state.arm.position']['q99'][6:] + norm_stats['observation.state.effector.position']['q99'][1:])
-                norm_stats['action']['q01'] = np.array(norm_stats['action.arm.position']['q01'][:6] + norm_stats['action.effector.position']['q01'][:1] + norm_stats['action.arm.position']['q01'][6:] + norm_stats['action.effector.position']['q01'][1:])
-                norm_stats['action']['q99'] = np.array(norm_stats['action.arm.position']['q99'][:6] + norm_stats['action.effector.position']['q99'][:1] + norm_stats['action.arm.position']['q99'][6:] + norm_stats['action.effector.position']['q99'][1:])
-            elif data_type == 'robotwin_rep':
-                norm_stats['observation.state'], norm_stats['action']  = {}, {}
-                norm_stats['observation.state']['q01'] = np.array(norm_stats['observation.state.arm.position']['q01'] + norm_stats['observation.state.effector.position']['q01'])
-                norm_stats['observation.state']['q99'] = np.array(norm_stats['observation.state.arm.position']['q99'] + norm_stats['observation.state.effector.position']['q99'])
-                norm_stats['action']['q01'] = np.array(norm_stats['action.arm.position']['q01'][:6] + norm_stats['action.effector.position']['q01'][:1] + norm_stats['action.arm.position']['q01'][6:] + norm_stats['action.effector.position']['q01'][1:])
-                norm_stats['action']['q99'] = np.array(norm_stats['action.arm.position']['q99'][:6] + norm_stats['action.effector.position']['q99'][:1] + norm_stats['action.arm.position']['q99'][6:] + norm_stats['action.effector.position']['q99'][1:])
-            elif data_type == 'customized':
-                for key in norm_stats:
-                    if isinstance(norm_stats[key], dict):
-                        for sub_key in norm_stats[key]:
-                            norm_stats[key][sub_key] = np.array(norm_stats[key][sub_key])
-            self.norm_stats = norm_stats
-        else:
-            self.norm_stats = dict_apply(lambda x: x.astype(np.float32), norm_stats)
+        self.norm_stats = dict_apply(lambda x: np.array(x).astype(np.float32), norm_stats)
         self.norm_type = norm_type or {}
-        self.from_file = from_file
 
     def normalize(self, data: Dict[str, np.ndarray]) -> Dict[str, torch.Tensor]:
         normalized_data = {}
@@ -74,13 +47,10 @@ class Normalizer:
                     mean = self.norm_stats[key]["mean"]
                     std = self.norm_stats[key]["std"]
                     normalized_value = (value - mean) / (std + 1e-6)
-                elif norm_type == "bounds_99_woclip":
+                elif norm_type == "bounds_99":
                     low = self.norm_stats[key]["q01"]
                     high = self.norm_stats[key]["q99"]
                     normalized_value = (value  - low) / (high - low + 1e-6) * 2.0 - 1.0
-                elif norm_type == "std":
-                    std = self.norm_stats[key]["std"]
-                    normalized_value = value / (std + 1e-6)
                 elif norm_type == "minmax":
                     min_val = self.norm_stats[key]["min"]
                     max_val = self.norm_stats[key]["max"]
@@ -91,7 +61,7 @@ class Normalizer:
                     normalized_value = value
                 else:
                     raise ValueError(
-                        f"Unknown normalization type: {norm_type}. Supported types are 'meanstd', 'minmax', and 'identity'."
+                        f"Unknown normalization type: {norm_type}. Supported types are 'meanstd', 'bounds_99', 'minmax', and 'identity'."
                     )
                 normalized_data[key] = normalized_value
             else:
@@ -118,17 +88,10 @@ class Normalizer:
                     mean = stats["mean"]
                     std = stats["std"]
                     unnormalized_value = value * (std + 1e-6) + mean
-                elif norm_type == "bounds_98" or norm_type == 'bounds_98_woclip':
-                    low = self.norm_stats[key]["q02"]
-                    high = self.norm_stats[key]["q98"]
-                    unnormalized_value = ((value + 1.0) / 2.0) * (high - low + 1e-6) + low
-                elif norm_type == "bounds_99" or norm_type == "bounds_99_woclip":
+                elif norm_type == "bounds_99":
                     low = self.norm_stats[key]["q01"]
                     high = self.norm_stats[key]["q99"]
                     unnormalized_value = ((value + 1.0) / 2.0) * (high - low + 1e-6) + low
-                elif norm_type == "std":
-                    std = stats["std"]
-                    unnormalized_value = value * (std + 1e-6)
                 elif norm_type == "minmax":
                     min_val = stats["min"]
                     max_val = stats["max"]
@@ -138,7 +101,7 @@ class Normalizer:
                     unnormalized_value = value
                 else:
                     raise ValueError(
-                        f"Unknown normalization type: {norm_type}. Supported types are 'meanstd', 'minmax', and 'identity'."
+                        f"Unknown normalization type: {norm_type}. Supported types are 'meanstd', 'bounds_99', 'minmax', and 'identity'."
                     )
                 unnormalized_data[key] = unnormalized_value
             else:
@@ -167,7 +130,7 @@ def resize_with_pad_item(img, width, height, pad_value=-1):
     padded_img = F.pad(resized_img, (pad_width, 0, pad_height, 0), value=pad_value)
     return padded_img
 
-def prepare_images(config, image_processor, observation: dict[str, Tensor], use_depth_align=False):
+def prepare_images(image_processor, observation: dict[str, Tensor], resize_imgs_with_padding, use_depth_align=False, image_keys=None):
     """Normalize, resize, and pad images and stack them into a tensor.
 
     Args:
@@ -182,7 +145,8 @@ def prepare_images(config, image_processor, observation: dict[str, Tensor], use_
     if use_depth_align:
         pil_images = []
 
-    for key in IMAGE_KEYS:
+    image_keys = image_keys if image_keys is not None else IMAGE_KEYS
+    for key in image_keys:
         if key in observation["image"]:
             # resize, pad, and normalize
             img = observation["image"][key]
@@ -191,11 +155,11 @@ def prepare_images(config, image_processor, observation: dict[str, Tensor], use_
             if image_processor is None:
                 img = img.to(dtype) / 127.5 - 1.0 # to [-1, 1]
                 img = resize_with_pad_item(
-                    img, *config.resize_imgs_with_padding, pad_value=-1.0
+                    img, *resize_imgs_with_padding, pad_value=-1.0
                 )
             else:
                 img = resize_with_pad_item(
-                    img, *config.resize_imgs_with_padding, pad_value=0
+                    img, *resize_imgs_with_padding, pad_value=0
                 )
                 img = image_processor(img)['pixel_values']
             images.append(img)
@@ -229,7 +193,7 @@ def prepare_images(config, image_processor, observation: dict[str, Tensor], use_
 
     return images, img_masks, pil_images
 
-def prepare_state(config, observation: dict[str, Tensor]):
+def prepare_state(observation: dict[str, Tensor], max_state_dim):
     """Pad the state to the maximum state dimension.
 
     Args:
@@ -239,10 +203,10 @@ def prepare_state(config, observation: dict[str, Tensor]):
         state (torch.Tensor): (*b, max_state_dim) padded state tensor
     """
     state = observation["state"]
-    state = F.pad(state, (0, config.max_state_dim - state.shape[-1]))
+    state = F.pad(state, (0, max_state_dim - state.shape[-1]))
     return state
 
-def prepare_action(config, observation: dict[str, Tensor]):
+def prepare_action(observation: dict[str, Tensor], max_action_dim):
     """Pad the action to the maximum action dimension.
 
     Args:
@@ -254,10 +218,23 @@ def prepare_action(config, observation: dict[str, Tensor]):
     """
     # ipdb.set_trace()
     action = observation["action"]
-    action = F.pad(action, (0, config.max_action_dim - action.shape[-1]))
+    action = F.pad(action, (0, max_action_dim - action.shape[-1]))
     return action
 
-def prepare_language(config, language_tokenizer, observation: dict[str, Tensor]):
+def prepare_joint_pad(observation: dict[str, Tensor], max_dim):
+    """Pad the state to the maximum state dimension.
+
+    Args:
+        observation (dict[str, Tensor])
+
+    Returns:
+        state (torch.Tensor): (*b, max_state_dim) padded state tensor
+    """
+    joint_mask = observation["joint_mask"]
+    joint_mask = F.pad(joint_mask, (0, max_dim - joint_mask.shape[-1]))
+    return joint_mask
+
+def prepare_language(language_tokenizer, observation: dict[str, Tensor], tokenizer_max_length):
     """If `prompt` is provided, modify it to PaliGemma format and tokenize it.
     If `lang_tokens` and `lang_masks` are provided, use them directly.
 
@@ -291,7 +268,7 @@ def prepare_language(config, language_tokenizer, observation: dict[str, Tensor])
             prompt,
             padding="max_length",
             padding_side="right",
-            max_length=config.tokenizer_max_length,
+            max_length=tokenizer_max_length,
             truncation=True,
             return_tensors="pt",
         )

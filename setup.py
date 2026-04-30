@@ -42,14 +42,19 @@ def get_requires() -> List[str]:
         lines = [line.strip() for line in file_content.strip().split("\n") if not line.startswith("#")]
         return lines
 
+
 BASE_REQUIRE = [
     "torchdata>=0.8.0,<1.0",
     "blobfile>=3.0.0",
+    "torch==2.8.0",
+    "torchvision==0.23.0",
+    "torchaudio==2.8.0",
 ]
 
 def main():
     # Update install_requires and extras_require
-    install_requires = BASE_REQUIRE
+    install_requires = list(set(BASE_REQUIRE + get_requires()))
+
 
     setup(
         name="lingbotvla",
@@ -59,7 +64,6 @@ def main():
         url="https://www.robbyant.com",
         license="Apache 2.0",
         author="Robbyant Team",
-        author_email="lf419501@antgroup.com",
         description="LingBot-VLA: A Pragmatic VLA Foundation Model",
         install_requires=install_requires,
         include_package_data=False,

@@ -49,6 +49,95 @@ if is_torch_version_greater_than("2.4"):
 logger = logging.get_logger(__name__)
 
 
+def _format_attr_path(path: tuple[str, ...]) -> str:
+    return ".".join(path)
+
+
+def _resolve(root: Any, paths: List[tuple[str, ...]]) -> tuple[Optional[Any], Optional[tuple[str, ...]]]:
+    for path in paths:
+        current = root
+        for attr in path:
+            current = getattr(current, attr, None)
+            if current is None:
+                break
+        if current is not None:
+            return current, path
+    return None, None
+
+
+def _resolve_required(root: Any, name: str, paths: List[tuple[str, ...]]) -> tuple[Any, tuple[str, ...]]:
+    module, path = _resolve(root, paths)
+    if module is None or path is None:
+        candidates = ", ".join(_format_attr_path(candidate) for candidate in paths)
+        raise RuntimeError(f"Could not locate {name}. Tried: {candidates}")
+    return module, path
+
+
+def _iter_unique_named_parameters(module: "nn.Module") -> List[tuple[str, torch.nn.Parameter]]:
+    seen = set()
+    params = []
+    for name, param in module.named_parameters():
+        if id(param) in seen:
+            continue
+        seen.add(id(param))
+        params.append((name, param))
+    return params
+
+
+def _log_fsdp2_root_unit_summary(
+    model: "nn.Module",
+    sharded_modules: List[tuple[str, "nn.Module"]],
+    shard_dtype: torch.dtype,
+    world_size: int,
+    topk: int = 12,
+) -> None:
+    if world_size <= 0:
+        world_size = 1
+
+    root_named_params = []
+    sharded_param_ids = set()
+    for _, module in sharded_modules:
+        for _, param in _iter_unique_named_parameters(module):
+            sharded_param_ids.add(id(param))
+
+    for name, param in _iter_unique_named_parameters(model):
+        if id(param) not in sharded_param_ids:
+            root_named_params.append((name, param))
+
+    root_param_count = sum(param.numel() for _, param in root_named_params)
+    bytes_per_elem = torch.tensor([], dtype=shard_dtype).element_size()
+    root_payload_bytes = root_param_count * bytes_per_elem
+    ring_wire_bytes = root_payload_bytes * max(world_size - 1, 0) / max(world_size, 1)
+
+    logger.info_rank0(
+        "FSDP2 root unit summary: "
+        f"params={root_param_count / 1e6:.2f}M, "
+        f"payload={root_payload_bytes / 1024**3:.2f} GiB @ {shard_dtype}, "
+        f"ring_wire_per_collective={ring_wire_bytes / 1024**3:.2f} GiB (world_size={world_size})."
+    )
+    logger.info_rank0(
+        "FSDP2 comm estimate: "
+        f"HEAD_AG≈{ring_wire_bytes / 1024**3:.2f} GiB wire, "
+        f"Tail_RS≈{ring_wire_bytes / 1024**3:.2f} GiB wire."
+    )
+
+    sharded_module_summary = ", ".join(
+        f"{name}({sum(param.numel() for _, param in _iter_unique_named_parameters(module)) / 1e6:.1f}M)"
+        for name, module in sharded_modules
+    )
+    if sharded_module_summary:
+        logger.info_rank0(f"FSDP2 explicitly sharded modules: {sharded_module_summary}")
+
+    if root_named_params:
+        root_named_params.sort(key=lambda item: item[1].numel(), reverse=True)
+        formatted = ", ".join(
+            f"{name}({param.numel() / 1e6:.1f}M)" for name, param in root_named_params[:topk]
+        )
+        logger.info_rank0(f"FSDP2 top root params: {formatted}")
+    else:
+        logger.info_rank0("FSDP2 top root params: <none>")
+
+
 def verbose_fsdp_grouping(model, prefix="", depth=0):
     indent = "    " * depth
 
@@ -77,9 +166,6 @@ def build_parallelize_model(
     enable_gradient_checkpointing: bool = True,
     basic_modules: Optional[List[str]] = None,
     fsdp_llm_blocks: bool = True,
-    ignore_norm: bool = False,
-    use_depth_align: bool = False,
-    ignore_depth: bool = False,
     **kwargs,
 ) -> "nn.Module":
     """
@@ -157,35 +243,69 @@ def build_parallelize_model(
                     output_dtype=torch.float32,
                 )
                 fsdp_kwargs["mp_policy"] = mp_policy
-            if ignore_norm:
-                ignored_modules = set()
-                for layer in model.model.qwenvl_with_expert.qwenvl.language_model.model.layers:
-                    ignored_modules.add(layer.input_layernorm.weight)
-                    ignored_modules.add(layer.post_attention_layernorm.weight)
-                for expert_layers in model.model.qwenvl_with_expert.qwen_expert.model.layers:
-                    ignored_modules.add(expert_layers.input_layernorm.weight)
-                    ignored_modules.add(expert_layers.post_attention_layernorm.weight)
-                fsdp_kwargs["ignored_params"] = ignored_modules
+            shard_param_dtype = torch.float32 if enable_fp32 else torch.bfloat16
+            explicitly_sharded_modules: List[tuple[str, nn.Module]] = []
+
+            paligemma_with_expert, _ = _resolve(
+                model,
+                [
+                    ("model", "paligemma_with_expert"),
+                    ("paligemma_with_expert",),
+                ],
+            )
+
+            qwenvl_with_expert, _ = _resolve(
+                model,
+                [
+                    ("model", "qwenvl_with_expert"),
+                    ("qwenvl_with_expert",),
+                ],
+            )
+
+            llm_layers = None
+            llm_layers_path = None
+            expert_layers = None
+            expert_layers_path = None
+            if paligemma_with_expert is not None:
+                llm_layers, llm_layers_path = _resolve_required(
+                    paligemma_with_expert,
+                    "Pi0 decoder layers",
+                    [
+                        ("paligemma", "model", "layers"),
+                        ("paligemma", "language_model", "model", "layers"),
+                        ("paligemma", "model", "language_model", "layers"),
+                    ],
+                )
+                expert_layers, expert_layers_path = _resolve_required(
+                    paligemma_with_expert,
+                    "Gemma expert decoder layers",
+                    [
+                        ("gemma_expert", "model", "layers"),
+                    ],
+                )
+            elif qwenvl_with_expert is not None:
+                llm_layers, llm_layers_path = _resolve_required(
+                    qwenvl_with_expert,
+                    "Qwen decoder layers",
+                    [
+                        ("qwenvl", "model", "layers"),
+                        ("qwenvl", "language_model", "model", "layers"),
+                        ("qwenvl", "model", "language_model", "layers"),
+                    ],
+                )
+                expert_layers, expert_layers_path = _resolve_required(
+                    qwenvl_with_expert,
+                    "qwen expert decoder layers",
+                    [
+                        ("qwen_expert", "model", "layers"),
+                    ],
+                )
 
             mp_fsdp_kwargs = {
                 "mesh": parallel_state.fsdp_mesh,
                 "reshard_after_forward": enable_full_shard,
                 **kwargs.pop("fsdp_kwargs", {}),
             }
-            if use_depth_align and ignore_depth:
-                model.model.dav2_backbone.to(torch.bfloat16)
-                model.model.dav2_head.to(torch.bfloat16)
-                model.model.dav2_backbone.eval()
-                model.model.dav2_head.eval()
-                
-                ignored_modules = set()
-                for param in model.model.dav2_backbone.parameters():
-                    param.requires_grad = False
-                    ignored_modules.add(param)
-                for param in model.model.dav2_head.parameters():
-                    param.requires_grad = False
-                    ignored_modules.add(param)
-                mp_fsdp_kwargs["ignored_params"] = ignored_modules
 
             mp_fsdp_kwargs["mp_policy"] = MixedPrecisionPolicy(
                     param_dtype=torch.bfloat16,
@@ -207,18 +327,108 @@ def build_parallelize_model(
             if basic_modules:
                 model.apply(apply_fsdp_to_decoder_blocks)
             elif fsdp_llm_blocks:
-                layers = model.model.qwenvl_with_expert.qwenvl.language_model.model.layers
-                expert_layers = model.model.qwenvl_with_expert.qwen_expert.model.layers
-                if not hasattr(layers, '__iter__') or not hasattr(expert_layers, '__iter__'):
+                if llm_layers is None or expert_layers is None:
+                    raise RuntimeError(
+                        "fsdp_llm_blocks=True requires a resolvable paligemma_with_expert module. "
+                        "Expected one of model.paligemma_with_expert or model.model.paligemma_with_expert."
+                    )
+                if not hasattr(llm_layers, "__iter__") or not hasattr(expert_layers, "__iter__"):
                     raise TypeError("Expected 'layers' to be a module list or container.")
-                logger.info_rank0(f"Applying FSDP to {len(layers)} transformer layers in Paligemma and Gemma decoder.")
-                for i, layer in enumerate(layers):
+
+                logger.info_rank0(
+                    "Applying FSDP to "
+                    f"{len(llm_layers)} Pi0/Qwen layers via {_format_attr_path(llm_layers_path)} "
+                    f"and {len(expert_layers)} Gemma expert layers via {_format_attr_path(expert_layers_path)}."
+                )
+                for i, layer in enumerate(llm_layers):
                     logger.debug(f"Sharding layer {i} ({layer.__class__.__name__})")
                     fully_shard(layer, **fsdp_kwargs)
+                    explicitly_sharded_modules.append((f"{_format_attr_path(llm_layers_path)}[{i}]", layer))
                 for i, layer in enumerate(expert_layers):
                     logger.debug(f"Sharding layer {i} ({layer.__class__.__name__})")
                     fully_shard(layer, **fsdp_kwargs)
+                    explicitly_sharded_modules.append((f"{_format_attr_path(expert_layers_path)}[{i}]", layer))
 
+                extra_shard_targets = [
+                    (
+                        "Pi0/Qwen embed_tokens",
+                        [
+                            ("paligemma", "model", "embed_tokens"),
+                            ("paligemma", "language_model", "model", "embed_tokens"),
+                            ("paligemma", "model", "language_model", "embed_tokens"),
+                            ("qwenvl", "model", "embed_tokens"),
+                            ("qwenvl", "language_model", "model", "embed_tokens"),
+                            ("qwenvl", "model", "language_model", "embed_tokens"),
+                        ],
+                    ),
+                    (
+                        "Pi0/Qwen lm_head",
+                        [
+                            ("paligemma", "lm_head"),
+                            ("paligemma", "language_model", "lm_head"),
+                            ("qwenvl", "lm_head"),
+                            ("qwenvl", "language_model", "lm_head"),
+                        ],
+                    ),
+                    (
+                        "Pi0/Qwen visual.patch_embed",
+                        [
+                            ("paligemma", "visual", "patch_embed"),
+                            ("paligemma", "model", "visual", "patch_embed"),
+                            ("qwenvl", "visual", "patch_embed"),
+                            ("qwenvl", "model", "visual", "patch_embed"),
+                        ],
+                    ),
+                    (
+                        "Pi0/Qwen visual.merger",
+                        [
+                            ("paligemma", "visual", "merger"),
+                            ("paligemma", "model", "visual", "merger"),
+                            ("qwenvl", "visual", "merger"),
+                            ("qwenvl", "model", "visual", "merger"),
+                        ],
+                    ),
+                    (
+                        "expert_visual",
+                        [
+                            ("expert_visual",),
+                        ],
+                    ),
+                    (
+                        "expert_visual_mlp",
+                        [
+                            ("expert_visual_mlp",),
+                        ],
+                    ),
+                ]
+                for target_name, candidate_paths in extra_shard_targets:
+                    target_module, target_path = _resolve(paligemma_with_expert, candidate_paths)
+                    if target_module is None or target_path is None:
+                        continue
+                    logger.debug(f"Sharding {target_name} via {_format_attr_path(target_path)}")
+                    fully_shard(target_module, **fsdp_kwargs)
+                    explicitly_sharded_modules.append((_format_attr_path(target_path), target_module))
+
+                _log_fsdp2_root_unit_summary(
+                    model=model,
+                    sharded_modules=explicitly_sharded_modules,
+                    shard_dtype=shard_param_dtype,
+                    world_size=parallel_state.fsdp_mesh.size(),
+                )
+            llm_layers, llm_path = _resolve(model.model.qwenvl_with_expert.qwenvl, [
+                ("model", "layers"),                      # transformers 4.5x
+                ("language_model", "model", "layers"),    # 旧版本兼容
+            ])
+            
+            if llm_layers is None or not hasattr(llm_layers, "__iter__"):
+                raise RuntimeError(
+                    "Could not locate Qwen2.5-VL decoder layers. ... "
+                    "sharding would silently fall back and produce a 5+ GB root AllGather."
+                )
+            for layer in llm_layers:
+                if layer.__class__.__name__ == "Qwen2_5_VLDecoderLayer" or layer.__class__.__name__ == "Qwen2_5_VLVisionBlock":
+                    logger.info_rank0(f"Apply FSDP2 to {layer.__class__.__name__}.")
+                    fully_shard(layer, **mp_fsdp_kwargs)
             fully_shard(model, **mp_fsdp_kwargs)
 
             if kwargs.get("init_device") == "meta":
@@ -230,7 +440,20 @@ def build_parallelize_model(
                     from torch.distributed.tensor import distribute_tensor
 
                     load_model_weights(model, weights_path, "cuda", dtensor_factory=distribute_tensor)
-
+            llm_layers, llm_path = _resolve(model.model.qwenvl_with_expert.qwenvl, [
+                ("model", "layers"),                      # transformers 4.5x
+                ("language_model", "model", "layers"),    # 旧版本兼容
+            ])
+            
+            if llm_layers is None or not hasattr(llm_layers, "__iter__"):
+                raise RuntimeError(
+                    "Could not locate Qwen2.5-VL decoder layers. ... "
+                    "sharding would silently fall back and produce a 5+ GB root AllGather."
+                )
+            for layer in llm_layers:
+                if layer.__class__.__name__ == "Qwen2_5_VLDecoderLayer" or layer.__class__.__name__ == "Qwen2_5_VLVisionBlock":
+                    logger.info_rank0(f"Apply FSDP2 to {layer.__class__.__name__}.")
+                    fully_shard(layer, **mp_fsdp_kwargs)
         elif parallel_state.dp_mode == "fsdp1":
             wrap_policy = partial(
                 lambda_auto_wrap_policy, lambda_fn=lambda module: module.__class__.__name__ in basic_modules
