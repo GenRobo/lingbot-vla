@@ -1,0 +1,49 @@
+model:
+  model_path: robbyant/lingbot-vla-4b
+  tokenizer_path: Qwen/Qwen2.5-VL-3B-Instruct
+
+data:
+  datasets_type: vla
+  data_name: r1pro_delta_right
+  train_path: /home/azureuser/dataset/htx/brs_ctrl/lerobot_v3/iv_pnp_250515
+  joints:
+    - arm.position: 8           # 7 real (right arm) + 1 headroom
+    - effector.position: 1      # 1 real (right gripper)
+  cameras:
+    - camera_top
+    - camera_wrist_left
+    - camera_wrist_right
+  num_workers: 8
+  norm_type: meanstd
+  norm_stats_file: assets/norm_stats/r1pro_delta_right.json
+
+train:
+  output_dir: "output/r1pro_delta_right/"
+  seed: 42
+  data_parallel_mode: fsdp2
+  enable_full_shard: false
+  module_fsdp_enable: true
+  use_compile: true
+  rmpad: false
+  rmpad_with_pos_ids: false
+  ulysses_parallel_size: 1
+  freeze_vision_encoder: false
+  tokenizer_max_length: 72
+  max_action_dim: 75
+  max_state_dim: 75
+  lr: 5.0e-5
+  lr_decay_style: constant
+
+  # 4×A100-80GB → global_batch_size = 8 × 4 × 8 = 256
+  # For A100-40GB use micro_batch_size: 4, gradient_accumulation_steps: 16
+  micro_batch_size: 8
+  gradient_accumulation_steps: 8
+
+  # Epoch-based: 100 epochs ≈ 3400 update steps (1 epoch ≈ 34 steps at global_batch=256)
+  num_train_epochs: 100
+  save_epochs: 20             # checkpoints at ep 20/40/60/80/100
+  save_steps: 0               # disable step-based saving
+  ckpt_manager: dcp
+  save_hf_weights: true
+  enable_fp32: true
+  enable_resume: true

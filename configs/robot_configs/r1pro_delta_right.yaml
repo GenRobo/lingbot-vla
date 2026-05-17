@@ -1,0 +1,30 @@
+# R1Pro pick-and-place: right arm + right gripper, delta arm actions.
+# Left arm omitted (sensor-noise level signal in this dataset).
+# Left gripper, base velocity, torso omitted (no usable signal).
+states:
+  - observation.state.arm.position:
+      origin_keys:
+        - observation.state.right_arm: { start: 0, end: 7 }
+
+  - observation.state.effector.position:
+      origin_keys:
+        - observation.state.right_gripper: { start: 0, end: 1 }
+
+actions:
+  - action.arm.position:
+      origin_keys:
+        - action.right_arm: { start: 0, end: 7 }
+      subtract_state: True
+
+  - action.effector.position:
+      origin_keys:
+        - action.right_gripper: { start: 0, end: 1 }
+      subtract_state: False
+
+images:
+  - observation.images.camera_top:
+      origin_keys: observation.images.head
+  - observation.images.camera_wrist_left:
+      origin_keys: observation.images.left_wrist
+  - observation.images.camera_wrist_right:
+      origin_keys: observation.images.right_wrist

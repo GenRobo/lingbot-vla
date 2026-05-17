@@ -216,3 +216,13 @@ run.sh
 start_multi_eval.sh
 trash/
 eval.sh
+
+# Local Claude Code state (settings, scheduled tasks)
+.claude/
+
+# Pre-trained model weights downloaded locally (use scripts/download_hf_model.py
+# on each machine — too big to track in git)
+lingbot-vla-4b/
+
+# Training outputs
+output/

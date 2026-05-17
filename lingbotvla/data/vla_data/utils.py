@@ -245,7 +245,16 @@ class FeatureTransform:
                 if origin_key not in item:
                     convert_success = False
                     break
-                origin_data = item.get(origin_key)[..., origin_info['start']:origin_info['end']]
+                origin_tensor = item.get(origin_key)
+                # LeRobot drops the singleton dim on shape=(1,) features (maps
+                # them to datasets.Value), so restore the feature dim before
+                # slicing the last axis.
+                slice_len = origin_info['end'] - origin_info['start']
+                if origin_tensor.ndim == 0:
+                    origin_tensor = origin_tensor.unsqueeze(0)
+                elif origin_tensor.ndim == 1 and origin_tensor.shape[0] != slice_len:
+                    origin_tensor = origin_tensor.unsqueeze(-1)
+                origin_data = origin_tensor[..., origin_info['start']:origin_info['end']]
                 concat_list.append(origin_data)
             if convert_success:
                 out_item[target_key] = torch.cat(concat_list, dim=-1)
