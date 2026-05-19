@@ -208,6 +208,7 @@ __marimo__/
 
 # log
 *log.txt
+log_*.txt
 ossutil_output/
 .sumi/
 env.sh
@@ -226,3 +227,8 @@ lingbot-vla-4b/
 
 # Training outputs
 output/
+# Eval outputs (large, per-traj artifacts; regenerate via scripts/run_open_loop_eval.sh)
+eval/
+
+# Runtime pid files from training-orchestration scripts
+scripts/.*.pid

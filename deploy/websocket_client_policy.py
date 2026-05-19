@@ -29,8 +29,13 @@ class WebsocketClientPolicy:
         while True:
             try:
                 headers = {"Authorization": f"Api-Key {self._api_key}"} if self._api_key else None
+                # ping_interval=None disables keepalive. The default 20s
+                # interval is much shorter than the first --use_compile
+                # inference call (~60s+), which would otherwise close the
+                # connection mid-compile with a "keepalive ping timeout".
                 conn = websockets.sync.client.connect(
-                    self._uri, compression=None, max_size=None, additional_headers=headers
+                    self._uri, compression=None, max_size=None,
+                    additional_headers=headers, ping_interval=None,
                 )
                 metadata = unpackb(conn.recv())
                 return conn, metadata

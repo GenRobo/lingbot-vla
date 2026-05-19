@@ -260,11 +260,32 @@ class LingbotVLAServer:
             if isinstance(v, np.ndarray):
                 observation[k] = torch.from_numpy(v)
         
-        for action_feature in self.vla.feature_transform.org_features['actions']:
+        # Populate dummy zero actions for any action key the client didn't
+        # send. At inference time these are overwritten by sample_actions,
+        # but FeatureTransform.apply still needs them to exist with the
+        # right last-dim so the delta-action subtract broadcasts. The
+        # previous version used `org_features['states'][0].shape[0]` as the
+        # dim, but org_features is set-derived (utils.py:75) and its
+        # iteration order is non-deterministic across Python processes —
+        # when state[0] happened to be the 1-dim gripper, the arm dummy
+        # got last-dim 1 instead of 7 and apply() crashed broadcasting
+        # state (7,) into action (50, 1). Fix: derive each action's dim
+        # from its paired state, not from a single arbitrary state[0].
+        org_action_keys = self.vla.feature_transform.org_features['actions']
+        chunk_size = self.vla.feature_transform.chunk_size
+        for action_feature in org_action_keys:
             if action_feature not in observation:
-                observation[action_feature] =  torch.zeros(self.vla.feature_transform.chunk_size, observation[self.vla.feature_transform.org_features['states'][0]].shape[0])
+                paired_state = action_feature.replace('action.', 'observation.state.')
+                action_dim = observation[paired_state].shape[-1]
+                observation[action_feature] = torch.zeros(chunk_size, action_dim)
 
-        observation[self.vla.feature_transform.org_features['actions'][0]+'_is_pad'] = torch.zeros(observation[self.vla.feature_transform.org_features['actions'][0]].shape[0])
+        # `_is_pad` key must match the one FeatureTransform.apply() reads
+        # (utils.py:365 → `org_features['actions'][0]`). Use the same
+        # indexing here so within-process set iteration order matches.
+        is_pad_action_key = org_action_keys[0]
+        observation[is_pad_action_key + '_is_pad'] = torch.zeros(
+            observation[is_pad_action_key].shape[0]
+        )
         
         observation = self.vla.feature_transform.apply(observation)
         if self.use_bf16:
