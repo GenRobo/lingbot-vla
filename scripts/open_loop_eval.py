@@ -114,9 +114,18 @@ def evaluate_single_trajectory(
             traj[image_key] = image
         preds = policy.infer(traj)
 
-        gt_action_across_time += [np.concatenate([traj[action_feature][:action_horizon] for action_feature in policy.vla.feature_transform.org_features['actions']], axis=-1)]
-        state_joints_across_time += [np.concatenate([traj[state_feature] for state_feature in policy.vla.feature_transform.org_features['states']], axis=-1)]
-        pred_action_across_time += [np.concatenate([preds[action_feature] for action_feature in policy.vla.feature_transform.org_features['actions']], axis=-1)]
+        # Action chunks come in as (T, D) for vector joints (arm: D=7) but (T,) for
+        # scalar joints (gripper). Promote 1-D to (T, 1) so concat along last axis works.
+        def _act2d(a):
+            a = np.asarray(a)
+            return a[..., None] if a.ndim == 1 else a
+        # Per-frame states come in as (D,) for vector joints and 0-D scalar for scalar
+        # joints. Flatten each so concat along last axis (= only axis for 1-D) works.
+        def _state_flat(a):
+            return np.asarray(a).reshape(-1)
+        gt_action_across_time += [np.concatenate([_act2d(traj[af][:action_horizon]) for af in policy.vla.feature_transform.org_features['actions']], axis=-1)]
+        state_joints_across_time += [np.concatenate([_state_flat(traj[sf]) for sf in policy.vla.feature_transform.org_features['states']], axis=-1)]
+        pred_action_across_time += [np.concatenate([_act2d(preds[af]) for af in policy.vla.feature_transform.org_features['actions']], axis=-1)]
         
         if count >=max_infer_time: break
     
@@ -137,6 +146,26 @@ def evaluate_single_trajectory(
 
     logging.info(f"gt_action_joints vs time {gt_action_across_time.shape}")
     logging.info(f"pred_action_joints vs time {pred_action_across_time.shape}")
+
+    # Dump per-traj raw arrays for post-hoc dim-restricted re-aggregation.
+    # Column layout follows policy.vla.feature_transform.org_features['actions']
+    # with scalar features expanded to width 1 (matches the concat above).
+    if save_plot_path is not None:
+        from pathlib import Path as _P
+        npz_path = _P(save_plot_path).with_suffix(".npz")
+        action_keys = list(policy.vla.feature_transform.org_features['actions'])
+        action_widths = []
+        for af in action_keys:
+            sample = traj[af][:action_horizon] if af in traj else preds[af]
+            a = np.asarray(sample)
+            action_widths.append(int(a.shape[-1]) if a.ndim >= 2 else 1)
+        np.savez_compressed(
+            npz_path,
+            gt=gt_action_across_time,
+            pred=pred_action_across_time,
+            action_keys=np.asarray(action_keys),
+            action_widths=np.asarray(action_widths, dtype=np.int64),
+        )
 
     # Plot trajectory results
     plot_trajectory_results(
@@ -173,7 +202,9 @@ def main(policy, robo_name, data_root, traj_ids, chunk_size, save_plot_path):
     delta_timestamps = {}
     for action_feature in policy.vla.feature_transform.org_features['actions']:
         delta_timestamps[action_feature] = [t / dataset_meta.fps for t in range(policy.config.chunk_size)]
-    dataset = LeRobotDataset(repo_id, root=root, delta_timestamps=delta_timestamps)
+    # Relax tolerance_s to absorb residual sub-frame drift between parquet timestamps
+    # and CFR-encoded video PTS (default 1e-4 is stricter than recording-time jitter).
+    dataset = LeRobotDataset(repo_id, root=root, delta_timestamps=delta_timestamps, tolerance_s=0.05)
     print(f"Dataset length: {len(dataset)}")
     logging.info(f"Running evaluation on trajectories: {traj_ids}")
 

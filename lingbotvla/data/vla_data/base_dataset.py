@@ -146,7 +146,10 @@ class VLADataset(Dataset):
             repo_id=repo_id,
             image_transforms=Resize(image_size),
             delta_timestamps=self.get_delta_timestamps(),
-            load_image=load_image
+            load_image=load_image,
+            # Sub-frame drift exists between source parquet timestamps and CFR video PTS;
+            # default tolerance_s=1e-4 is stricter than recording-time jitter.
+            tolerance_s=0.05,
         )
         
         self.task_mapping = dict(zip(self.dataset_meta.tasks['task_index'], self.dataset_meta.tasks.index))
