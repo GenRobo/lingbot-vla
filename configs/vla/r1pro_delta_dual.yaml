@@ -4,21 +4,21 @@ model:
 
 data:
   datasets_type: vla
-  data_name: r1pro_delta_right
+  data_name: r1pro_delta_dual
   train_path: /home/azureuser/dataset/htx/brs_ctrl/lerobot_v3/iv_pnp_250515
   joints:
-    - arm.position: 8           # 7 real (right arm) + 1 headroom
-    - effector.position: 1      # 1 real (right gripper)
+    - arm.position: 14          # 7 left + 7 right
+    - effector.position: 2      # left + right gripper
   cameras:
     - camera_top
     - camera_wrist_left
     - camera_wrist_right
   num_workers: 8
   norm_type: meanstd
-  norm_stats_file: assets/norm_stats/r1pro_delta_right.json
+  norm_stats_file: assets/norm_stats/r1pro_delta_dual.json
 
 train:
-  output_dir: "output/r1pro_delta_right/"
+  output_dir: "output/r1pro_delta_dual/"
   seed: 42
   data_parallel_mode: fsdp2
   enable_full_shard: false
@@ -34,16 +34,15 @@ train:
   lr: 5.0e-5
   lr_decay_style: constant
 
-  # 4×A100-80GB → global_batch_size = 8 × 4 × 8 = 256
-  # For A100-40GB use micro_batch_size: 4, gradient_accumulation_steps: 16
-  micro_batch_size: 8
-  gradient_accumulation_steps: 8
+  # 4×A100-80GB; matches right-arm run after the VRAM-headroom bump.
+  micro_batch_size: 16
+  gradient_accumulation_steps: 4
 
   # Epoch-based: 300 epochs ≈ 10200 update steps (1 epoch ≈ 34 steps at global_batch=256).
   # Long run — watch loss and kill on plateau; checkpoints at ep 20/40/.../280/300.
   num_train_epochs: 300
   save_epochs: 20
-  save_steps: 0               # disable step-based saving
+  save_steps: 0
   ckpt_manager: dcp
   save_hf_weights: true
   enable_fp32: true

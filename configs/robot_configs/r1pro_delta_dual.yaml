@@ -1,0 +1,35 @@
+# R1Pro pick-and-place: BOTH arms + BOTH grippers, delta arm actions.
+# Companion to r1pro_delta_right.yaml. Note left-arm signal in iv_pnp_250515 is
+# near-zero (actions echo state) — this run trains both arms anyway for comparison.
+# Order: left first (dims 0-6), right second (dims 7-13).
+states:
+  - observation.state.arm.position:
+      origin_keys:
+        - observation.state.left_arm: { start: 0, end: 7 }
+        - observation.state.right_arm: { start: 0, end: 7 }
+
+  - observation.state.effector.position:
+      origin_keys:
+        - observation.state.left_gripper: { start: 0, end: 1 }
+        - observation.state.right_gripper: { start: 0, end: 1 }
+
+actions:
+  - action.arm.position:
+      origin_keys:
+        - action.left_arm: { start: 0, end: 7 }
+        - action.right_arm: { start: 0, end: 7 }
+      subtract_state: True
+
+  - action.effector.position:
+      origin_keys:
+        - action.left_gripper: { start: 0, end: 1 }
+        - action.right_gripper: { start: 0, end: 1 }
+      subtract_state: False
+
+images:
+  - observation.images.camera_top:
+      origin_keys: observation.images.head
+  - observation.images.camera_wrist_left:
+      origin_keys: observation.images.left_wrist
+  - observation.images.camera_wrist_right:
+      origin_keys: observation.images.right_wrist
